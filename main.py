@@ -3,45 +3,65 @@ import os
 import requests
 from dotenv import load_dotenv
 
-# Load environment variables from .env file (for local dev)
+# Load .env
 load_dotenv()
 
-# Flask app
 app = Flask(__name__)
 
-# Get API credentials from environment variables
 ACCESS_TOKEN = os.environ.get("SHOPIFY_ACCESS_TOKEN")
 SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 
-# Webhook endpoint
+# All your metafield keys
+METAFIELD_KEYS = [
+    "billing_last_name", "billing_first_name", "shipping_email", "shipping_phone",
+    "shipping_country", "shipping_province", "shipping_postal_code", "shipping_city",
+    "shipping_address_2", "shipping_address_1", "shipping_last_name", "shipping_first_name",
+    "preferred_language", "business_type_other", "business_type", "company_website",
+    "company_name", "primary_phone", "role_other", "role", "internal_notes",
+    "sales_agent", "access_status", "message_notes", "billing_email", "billing_phone",
+    "billing_country", "billing_province", "billing_postal_code", "billing_city",
+    "billing_address_2", "billing_address_1"
+]
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
-    
-    # ✅ BONUS: Log full payload for debugging
-    print("📥 Incoming full payload:", data)
+    print("📥 Full payload received:", data)
 
-    if not data or 'id' not in data:
-        print("❌ Invalid webhook payload")
-        return jsonify({"error": "Invalid webhook data"}), 400
+    # Extract numeric ID from Shopify GID format
+    gid = data.get("id", "")
+    if "Customer/" not in gid:
+        return jsonify({"error": "Invalid customer GID"}), 400
 
-    customer_id = data['id']
-    print(f"✅ New customer webhook received: ID {customer_id}")
+    customer_id = gid.split("/")[-1]
+    print(f"✅ Processing customer ID: {customer_id}")
 
-    # Fetch customer metafields
-    metafields = fetch_customer_metafields(customer_id)
+    # Build metafields to update
+    metafields_payload = []
 
-    if metafields is not None:
-        print(f"📦 Metafields for Customer {customer_id}:")
-        for mf in metafields:
-            print(f"- {mf['namespace']}.{mf['key']}: {mf['value']}")
+    for key in METAFIELD_KEYS:
+        full_key = f"custom.{key}"
+        value = data.get(full_key)
+        if value:  # Only include if value is not None or empty
+            metafields_payload.append({
+                "namespace": "custom",
+                "key": key,
+                "type": "single_line_text_field",
+                "value": str(value)
+            })
+
+    if metafields_payload:
+        success = write_metafields(customer_id, metafields_payload)
+        if success:
+            print(f"📝 Updated {len(metafields_payload)} metafields for customer {customer_id}")
+        else:
+            print("❌ Failed to update metafields")
     else:
-        print("⚠️ Failed to retrieve metafields.")
+        print("⚠️ No metafield data to update")
 
     return jsonify({"status": "ok"}), 200
 
-
-def fetch_customer_metafields(customer_id):
+def write_metafields(customer_id, metafields):
     url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/customers/{customer_id}/metafields.json"
     headers = {
         "X-Shopify-Access-Token": ACCESS_TOKEN,
@@ -49,16 +69,16 @@ def fetch_customer_metafields(customer_id):
         "Accept": "application/json"
     }
 
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json().get("metafields", [])
+    payload = { "metafields": metafields }
+
+    response = requests.post(url, json=payload, headers=headers)
+    if response.status_code in [200, 201]:
+        return True
     else:
-        print(f"❌ Error fetching metafields: {response.status_code}")
+        print("❌ Shopify API error:", response.status_code)
         print(response.text)
-        return None
+        return False
 
-
-# Start Flask app (Render will auto-detect port)
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))  # Render sets this automatically
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
