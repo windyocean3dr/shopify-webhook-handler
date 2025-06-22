@@ -3,80 +3,77 @@ import os
 import requests
 from dotenv import load_dotenv
 
-# Load .env
+# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 
-ACCESS_TOKEN = os.environ.get("SHOPIFY_ACCESS_TOKEN")
-SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
+ACCESS_TOKEN = os.getenv("SHOPIFY_ACCESS_TOKEN")
+SHOPIFY_STORE = os.getenv("SHOPIFY_STORE")
+API_VERSION = "2024-01"
 
-# All your metafield keys
-METAFIELD_KEYS = [
-    "billing_last_name", "billing_first_name", "shipping_email", "shipping_phone",
-    "shipping_country", "shipping_province", "shipping_postal_code", "shipping_city",
-    "shipping_address_2", "shipping_address_1", "shipping_last_name", "shipping_first_name",
-    "preferred_language", "business_type_other", "business_type", "company_website",
-    "company_name", "primary_phone", "role_other", "role", "internal_notes",
-    "sales_agent", "access_status", "message_notes", "billing_email", "billing_phone",
+# List of expected customer metafields
+METAFIELDS = [
+    "billing_first_name", "billing_last_name", "billing_email", "billing_phone",
     "billing_country", "billing_province", "billing_postal_code", "billing_city",
-    "billing_address_2", "billing_address_1"
+    "billing_address_1", "billing_address_2", "shipping_first_name", "shipping_last_name",
+    "shipping_email", "shipping_phone", "shipping_country", "shipping_province",
+    "shipping_postal_code", "shipping_city", "shipping_address_1", "shipping_address_2",
+    "preferred_language", "business_type", "business_type_other", "company_name",
+    "company_website", "primary_phone", "role", "role_other", "internal_notes",
+    "sales_agent", "access_status", "message_notes"
 ]
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    data = request.get_json()
-    print("📥 Full payload received:", data)
+    payload = request.get_json()
+    print("\n📩 Incoming Payload:", payload)
 
-    # Extract numeric ID from Shopify GID format
-    gid = data.get("id", "")
-    if "Customer/" not in gid:
-        return jsonify({"error": "Invalid customer GID"}), 400
+    customer_id = payload.get("id")
+    if not customer_id:
+        return jsonify({"error": "Missing customer ID"}), 400
 
-    customer_id = gid.split("/")[-1]
-    print(f"✅ Processing customer ID: {customer_id}")
+    success = []
+    failed = []
 
-    # Build metafields to update
-    metafields_payload = []
+    for key in METAFIELDS:
+        value = payload.get(key)
+        if value is not None:
+            success_bool = write_metafield(customer_id, key, value)
+            if success_bool:
+                success.append(key)
+            else:
+                failed.append(key)
 
-    for key in METAFIELD_KEYS:
-        full_key = f"custom.{key}"
-        value = data.get(full_key)
-        if value:  # Only include if value is not None or empty
-            metafields_payload.append({
-                "namespace": "custom",
-                "key": key,
-                "type": "single_line_text_field",
-                "value": str(value)
-            })
+    print(f"\n✅ Metafields updated: {success}")
+    if failed:
+        print(f"\n⚠️ Failed to update: {failed}")
 
-    if metafields_payload:
-        success = write_metafields(customer_id, metafields_payload)
-        if success:
-            print(f"📝 Updated {len(metafields_payload)} metafields for customer {customer_id}")
-        else:
-            print("❌ Failed to update metafields")
-    else:
-        print("⚠️ No metafield data to update")
+    return jsonify({"status": "ok", "updated": success, "failed": failed}), 200
 
-    return jsonify({"status": "ok"}), 200
-
-def write_metafields(customer_id, metafields):
-    url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/customers/{customer_id}/metafields.json"
+def write_metafield(customer_id, key, value):
+    url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{API_VERSION}/metafields.json"
     headers = {
-        "X-Shopify-Access-Token": ACCESS_TOKEN,
         "Content-Type": "application/json",
-        "Accept": "application/json"
+        "X-Shopify-Access-Token": ACCESS_TOKEN
     }
 
-    payload = { "metafields": metafields }
+    metafield_data = {
+        "metafield": {
+            "namespace": "custom",
+            "key": key,
+            "value": value,
+            "type": "single_line_text_field",
+            "owner_id": customer_id,
+            "owner_resource": "customer"
+        }
+    }
 
-    response = requests.post(url, json=payload, headers=headers)
+    response = requests.post(url, json=metafield_data, headers=headers)
     if response.status_code in [200, 201]:
         return True
     else:
-        print("❌ Shopify API error:", response.status_code)
-        print(response.text)
+        print(f"❌ Error writing {key}: {response.status_code} - {response.text}")
         return False
 
 if __name__ == '__main__':
