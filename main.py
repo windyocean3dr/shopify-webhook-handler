@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import os
 import requests
+import json
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -8,73 +9,57 @@ load_dotenv()
 
 app = Flask(__name__)
 
-ACCESS_TOKEN = os.getenv("SHOPIFY_ACCESS_TOKEN")
-SHOPIFY_STORE = os.getenv("SHOPIFY_STORE")
-API_VERSION = "2024-01"
-
-# List of expected customer metafields
-METAFIELDS = [
-    "billing_first_name", "billing_last_name", "billing_email", "billing_phone",
-    "billing_country", "billing_province", "billing_postal_code", "billing_city",
-    "billing_address_1", "billing_address_2", "shipping_first_name", "shipping_last_name",
-    "shipping_email", "shipping_phone", "shipping_country", "shipping_province",
-    "shipping_postal_code", "shipping_city", "shipping_address_1", "shipping_address_2",
-    "preferred_language", "business_type", "business_type_other", "company_name",
-    "company_website", "primary_phone", "role", "role_other", "internal_notes",
-    "sales_agent", "access_status", "message_notes"
-]
+# Environment config
+ACCESS_TOKEN = os.environ.get("SHOPIFY_ACCESS_TOKEN")
+SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    payload = request.get_json()
-    print("\n📩 Incoming Payload:", payload)
+    data = request.get_json()
 
-    customer_id = payload.get("id")
+    # Log full payload for debugging
+    print("\n📥 Incoming customer data:")
+    print(json.dumps(data, indent=2))
+
+    # Get Shopify customer ID from GraphQL ID
+    customer_id = data.get("id", "")
+    if customer_id.startswith("gid://"):
+        customer_id = customer_id.split("/")[-1]
+
     if not customer_id:
-        return jsonify({"error": "Missing customer ID"}), 400
+        print("❌ Missing or invalid customer ID")
+        return jsonify({"error": "Invalid customer ID"}), 400
 
-    success = []
-    failed = []
+    # Loop through all fields and update metafields
+    for key, value in data.items():
+        if key in ["id", "email"]:
+            continue
+        namespace = "custom"
+        update_metafield(customer_id, namespace, key, value)
 
-    for key in METAFIELDS:
-        value = payload.get(key)
-        if value is not None:
-            success_bool = write_metafield(customer_id, key, value)
-            if success_bool:
-                success.append(key)
-            else:
-                failed.append(key)
+    return jsonify({"status": "ok"}), 200
 
-    print(f"\n✅ Metafields updated: {success}")
-    if failed:
-        print(f"\n⚠️ Failed to update: {failed}")
-
-    return jsonify({"status": "ok", "updated": success, "failed": failed}), 200
-
-def write_metafield(customer_id, key, value):
-    url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{API_VERSION}/metafields.json"
+def update_metafield(customer_id, namespace, key, value):
+    url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/customers/{customer_id}/metafields.json"
     headers = {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": ACCESS_TOKEN
+        "X-Shopify-Access-Token": ACCESS_TOKEN,
+        "Content-Type": "application/json"
     }
-
-    metafield_data = {
+    payload = {
         "metafield": {
-            "namespace": "custom",
+            "namespace": namespace,
             "key": key,
             "value": value,
-            "type": "single_line_text_field",
-            "owner_id": customer_id,
-            "owner_resource": "customer"
+            "type": "single_line_text_field"
         }
     }
 
-    response = requests.post(url, json=metafield_data, headers=headers)
-    if response.status_code in [200, 201]:
-        return True
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 201:
+        print(f"✅ Metafield {namespace}.{key} set to '{value}'")
     else:
-        print(f"❌ Error writing {key}: {response.status_code} - {response.text}")
-        return False
+        print(f"❌ Error updating metafield {namespace}.{key}: {response.status_code}")
+        print(response.text)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
