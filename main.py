@@ -9,17 +9,52 @@ app = Flask(__name__)
 ACCESS_TOKEN = os.environ.get("SHOPIFY_ACCESS_TOKEN")
 SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE")
 
+# ✅ Define known valid metafields and their expected types
+VALID_METAFIELDS = {
+    "billing_first_name": "single_line_text_field",
+    "billing_last_name": "single_line_text_field",
+    "billing_email": "single_line_text_field",
+    "billing_phone": "single_line_text_field",
+    "billing_country": "single_line_text_field",
+    "billing_province": "single_line_text_field",
+    "billing_postal_code": "single_line_text_field",
+    "billing_city": "single_line_text_field",
+    "billing_address_1": "single_line_text_field",
+    "billing_address_2": "single_line_text_field",
+    "shipping_first_name": "single_line_text_field",
+    "shipping_last_name": "single_line_text_field",
+    "shipping_email": "single_line_text_field",
+    "shipping_phone": "single_line_text_field",
+    "shipping_country": "single_line_text_field",
+    "shipping_province": "single_line_text_field",
+    "shipping_postal_code": "single_line_text_field",
+    "shipping_city": "single_line_text_field",
+    "shipping_address_1": "single_line_text_field",
+    "shipping_address_2": "single_line_text_field",
+    "preferred_language": "single_line_text_field",
+    "business_type": "single_line_text_field",
+    "business_type_other": "single_line_text_field",
+    "company_name": "single_line_text_field",
+    "company_website": "url",
+    "primary_phone": "single_line_text_field",
+    "role": "single_line_text_field",
+    "role_other": "single_line_text_field",
+    "internal_notes": "multi_line_text_field",
+    "sales_agent": "single_line_text_field",
+    "access_status": "single_line_text_field",
+    "message_notes": "single_line_text_field"
+}
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
-    print("📥 Incoming customer data:\n", data)
+    print("\U0001F4E5 Incoming customer data:\n", data)
 
     if not data or "id" not in data:
         print("❌ Invalid payload - missing customer ID.")
         return jsonify({"error": "Missing customer ID"}), 400
 
     customer_id = data["id"]
-    # Strip GraphQL ID if needed
     if isinstance(customer_id, str) and customer_id.startswith("gid://"):
         customer_id = customer_id.split("/")[-1]
 
@@ -27,22 +62,19 @@ def webhook():
 
     metafields = []
     for key, value in data.items():
-        if key in ["id", "email"] or value in [None, ""]:
+        if key in ["id", "email"] or value is None or str(value).strip() == "":
             print(f"⏩ Skipping empty or reserved field: {key}")
             continue
 
-        # Add correct metafield type for specific fields
-        metafield_type = "single_line_text_field"
-        if key == "company_website":
-            metafield_type = "url"
-        elif key == "internal_notes":
-            metafield_type = "multi_line_text_field"
+        if key not in VALID_METAFIELDS:
+            print(f"⚠️ Skipping unknown or unsupported field: {key}")
+            continue
 
         metafields.append({
             "namespace": "custom",
             "key": key,
-            "value": value,
-            "type": metafield_type
+            "value": str(value),
+            "type": VALID_METAFIELDS[key]
         })
 
     if not metafields:
@@ -57,7 +89,6 @@ def webhook():
             print(f"❌ Failed to update {metafield['namespace']}.{metafield['key']}")
 
     return jsonify({"status": "ok"}), 200
-
 
 def update_metafield(customer_id, metafield):
     url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/customers/{customer_id}/metafields.json"
@@ -78,7 +109,6 @@ def update_metafield(customer_id, metafield):
         print(f"❌ Error updating metafield {metafield['key']}: {response.status_code}")
         print(response.text)
         return False
-
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
