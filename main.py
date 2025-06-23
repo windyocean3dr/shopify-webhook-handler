@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 import os
 import requests
 from dotenv import load_dotenv
+import inflection
 
 load_dotenv()
 app = Flask(__name__)
@@ -45,10 +46,19 @@ VALID_METAFIELDS = {
     "message_notes": "single_line_text_field"
 }
 
+def parse_note_to_dict(note):
+    lines = note.strip().split("\n")
+    parsed = {}
+    for line in lines:
+        if ":" in line:
+            key, value = line.split(":", 1)
+            parsed[key.strip()] = value.strip()
+    return parsed
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
-    print("\U0001F4E5 Incoming customer data:\n", data)
+    print("📥 Incoming customer data:\n", data)
 
     if not data or "id" not in data:
         print("❌ Invalid payload - missing customer ID.")
@@ -60,21 +70,29 @@ def webhook():
 
     print(f"🔍 Normalized customer ID: {customer_id}")
 
+    merged_data = dict(data)  # Copy original data
+
+    if "note" in data and data["note"]:
+        parsed_note = parse_note_to_dict(data["note"])
+        merged_data.update(parsed_note)
+
     metafields = []
-    for key, value in data.items():
+    for key, value in merged_data.items():
         if key in ["id", "email"] or value is None or str(value).strip() == "":
             print(f"⏩ Skipping empty or reserved field: {key}")
             continue
 
-        if key not in VALID_METAFIELDS:
+        normalized_key = inflection.underscore(key)
+
+        if normalized_key not in VALID_METAFIELDS:
             print(f"⚠️ Skipping unknown or unsupported field: {key}")
             continue
 
         metafields.append({
             "namespace": "custom",
-            "key": key,
+            "key": normalized_key,
             "value": str(value),
-            "type": VALID_METAFIELDS[key]
+            "type": VALID_METAFIELDS[normalized_key]
         })
 
     if not metafields:
